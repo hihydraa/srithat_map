@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KC Map — MT-58 / MT-60 / สถานที่สำคัญ + สาขา (Fixed v3 • single-select)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root{
+      --blue:#1666d6; --red:#ef4444; --orange:#f59e0b; --card:#ffffff; --muted:#6b7280; --ring:0 0 0 3px rgb(22 102 214 / .18);
+      --bg: #f6f8fb; --text:#111827;
+    }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); }
+    #map { height: 100vh; width: 100vw; }
+
+    /* Floating controls */
+    .ctrl{position:absolute; z-index:1000; top:14px; right:14px; display:flex; flex-direction:column; gap:10px}
+    .box{background:var(--card); border:1px solid #e5e7eb; border-radius:14px; padding:12px; box-shadow:0 8px 24px rgba(0,0,0,.08);}
+    .box h3{margin:0 0 8px; font-size:14px}
+    .btn{appearance:none; border:1px solid #e5e7eb; padding:7px 10px; border-radius:10px; font-size:13px; background:#f9fafb; cursor:pointer}
+    .btn:focus{outline:none; box-shadow:var(--ring)}
+    .btn.small{font-size:12px; padding:6px 8px}
+    .pill{display:inline-flex; align-items:center; gap:6px; background:#f3f4f6; border:1px solid #e5e7eb; color:#111827; font-weight:600; padding:6px 10px; border-radius:999px; font-size:12px}
+
+    /* Section list */
+    .section{border:1px dashed #e5e7eb; border-radius:12px; padding:8px 10px; background:#fafafa; margin-top:8px; max-height:260px; overflow:auto}
+    .section .head{display:flex; justify-content:space-between; align-items:center; margin:6px 0}
+    .row{display:flex; align-items:center; gap:8px; margin:4px 0; font-size:13px}
+    .dot{width:10px; height:10px; border-radius:999px; display:inline-block; border:1px solid #e5e7eb}
+    .lbl{background:#fff !important; color:#111827 !important; border:1px solid #e5e7eb; padding:3px 6px !important; border-radius:8px !important; box-shadow:0 4px 12px rgba(0,0,0,.08)}
+
+    /* Small helper tips */
+    .tip{position:absolute; z-index:1000; left:14px; top:14px; background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; padding:6px 8px; box-shadow:0 4px 12px rgba(0,0,0,.06); font-size:12px; color:#374151}
+
+    /* Legend */
+    .legend{position:absolute; z-index:1000; left:14px; bottom:14px; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; box-shadow:0 8px 24px rgba(0,0,0,.08); font-size:13px}
+    .legend .row{display:flex; align-items:center; gap:8px; margin:4px 0}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Floating: helper tip -->
+  <div class="tip">📌 คลิกบนแผนที่เพื่อคัดลอกพิกัด</div>
+
+  <!-- Floating: filters & status -->
+  <div class="ctrl">
+    <div class="box" style="min-width:340px">
+      <h3>🎚️ กรองการแสดงผล (แยก Section)</h3>
+      <div class="row" style="gap:6px; margin-bottom:6px">
+        <button class="btn small" id="btnAllOn">เลือกทั้งหมด</button>
+        <button class="btn small" id="btnAllOff">ซ่อนทั้งหมด</button>
+        <span class="pill"><span id="countMarkers">0</span> จุด • <span id="countCircles">0</span> วงรัศมี</span>
+      </div>
+      <div id="sections"></div>
+    </div>
+  </div>
+
+  <!-- Floating: legend -->
+  <div class="legend">
+    <div style="font-weight:600; margin-bottom:4px">สัญลักษณ์</div>
+    <div class="row"><span class="dot" style="background:var(--blue)"></span> หมุดกลุ่ม MT-58</div>
+    <div class="row"><span class="dot" style="background:var(--red)"></span> หมุดกลุ่ม MT-60</div>
+    <div class="row"><span class="dot" style="background:var(--orange)"></span> ⭐ สถานที่สำคัญ</div>
+    <div class="row"><span class="dot" style="background:#8b5cf6"></span> สาขา (รัศมี 100 กม.)</div>
+    <div class="row"><span class="dot" style="background:#999"></span> จุดอื่นๆ</div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // ===== Map base =====
+    const INITIAL_CENTER = [16.40075, 103.36453];
+    const map = L.map('map', { center: INITIAL_CENTER, zoom: 8, preferCanvas: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+    const markersLayer = L.layerGroup().addTo(map);
+    const circlesLayer = L.layerGroup().addTo(map);
+    L.control.scale({ metric: true, imperial: false, position: 'bottomleft' }).addTo(map);
+
+    // ===== Helper =====
+    const fmtNum = (n) => Number.isFinite(n) ? Number(n.toFixed(6)) : n;
+    const counts = { markers: 0, circles: 0 };
+    const ACTIVE_KEYS = new Set();
+    const KEYPOINT = (p) => `${fmtNum(p.lat)}|${fmtNum(p.lng)}|${(p.label||'').trim()}`;
+
+    // Colored pin & star pin
+    function markerIcon({color='#1666d6', shape='pin'}){
+      if(shape === 'star'){
+        const svg = encodeURIComponent(`
+          <svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>
+            <path fill='${color}' stroke='white' stroke-width='1.5' d='M12 2.5l2.95 6.07 6.7.97-4.83 4.71 1.14 6.65L12 17.77 6.04 20.9l1.14-6.65L2.35 9.54l6.7-.97L12 2.5z'/>
+          </svg>`);
+        return L.icon({ iconUrl: `data:image/svg+xml,${svg}`, iconSize:[24,24], iconAnchor:[9,16], popupAnchor:[0,-16] });
+      }
+      return L.divIcon({
+        html: `<div style="width:16px;height:16px;background:${color};border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.25)"></div>`,
+        className: '', iconSize:[18,18], iconAnchor:[9,16], popupAnchor:[0,-16]
+      });
+    }
+
+    function updateStats(){
+      document.getElementById('countMarkers').textContent = counts.markers;
+      document.getElementById('countCircles').textContent = counts.circles;
+    }
+
+    function addPoint({ lat, lng, label = '', radiusKm = 0, color = '#1666d6', shape='pin' }){
+      lat = parseFloat(lat); lng = parseFloat(lng);
+      if(!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      const marker = L.marker([lat, lng], { icon: markerIcon({color, shape}) });
+      if(label){ marker.bindPopup(`<b>${label}</b>`); }
+      marker.addTo(markersLayer); counts.markers++;
+      let circle = null;
+      if(Number.isFinite(radiusKm) && radiusKm > 0){
+        circle = L.circle([lat, lng], { radius: radiusKm * 1000, color, weight: 2, fillOpacity: 0.08 }).addTo(circlesLayer);
+        counts.circles++;
+      }
+      return { marker, circle };
+    }
+
+    function render(points){
+      counts.markers = 0; counts.circles = 0;
+      markersLayer.clearLayers(); circlesLayer.clearLayers();
+      const bounds = [];
+      (points || []).forEach(p => {
+        const res = addPoint(p) || {};
+        if(res.marker){ bounds.push(res.marker.getLatLng()); }
+        if(res.circle){ bounds.push(res.circle.getBounds()); }
+      });
+      if(bounds.length){
+        try{
+          const all = L.latLngBounds([]);
+          bounds.forEach(b => all.extend(b));
+          map.fitBounds(all.pad(0.2));
+        }catch(e){ /* noop */ }
+      } else {
+        map.setView(INITIAL_CENTER, 8);
+      }
+      updateStats();
+    }
+
+    function renderFiltered(){
+      const pts = (PENDING_POINTS || []).filter(p => ACTIVE_KEYS.has(KEYPOINT(p)));
+      render(pts);
+    }
+
+    // ===== Data: MT-58 (blue) =====
+    const INIT_POINTS_MT58 = [
+      { label: 'ปั๊ม ส.ศิริโรจน์', lat: 16.908420738858442, lng: 103.16510454805565 },
+      { label: 'สถานนีปั๊มน้ำมัน 01', lat: 16.95835220075993, lng: 103.16403320606038 },
+      { label: 'ปั๊มหยอดเหรียญบ้านโนนสำราญ', lat: 16.969175646702165, lng: 102.97552550772018 },
+      { label: 'ปั๊มหยอดเหรียญ 01', lat: 17.139731764459313, lng: 102.7871870215529 },
+      { label: 'ปั๊มหยอดเหรียญหน้าคลินิค กชพร', lat: 17.17394942162665, lng: 102.77467097428217 },
+      { label: 'สถานนีปั๊มน้ำมัน 02', lat: 17.205307739386946, lng: 102.74922739663133 },
+      { label: 'ปั๊มหยอดเหรียญ 02', lat: 17.226327897384373, lng: 102.74389817978029 },
+      { label: 'สถานนีปั๊มน้ำมัน 03', lat: 17.139718905682457, lng: 102.7840913191436 },
+      { label: 'สถานนีปั๊มน้ำมัน 04', lat: 17.03908055009549, lng: 102.77099144507014 },
+      { label: 'ปั๊มหยอดเหรียญ 03', lat: 17.018547377062433, lng: 102.7735325009721 },
+      { label: 'ส.ปิโตรเลียมรุ่งเรืองพาณิชย์', lat: 17.002855026975332, lng: 102.75822079602814 },
+      { label: 'ปั๊มหยอดเหรียญ 04', lat: 16.954208562413847, lng: 102.79938898853268 },
+      { label: 'ปั๊มหยอดเหรียญ 05', lat: 16.95408008441485, lng: 102.79782234748653 },
+      { label: 'ปั๊มหยอดเหรียญ 06', lat: 16.702131541050832, lng: 103.07963396319245 },
+      { label: 'อานันท์ปิโตรเลียม', lat: 17.01895082380565, lng: 103.12914969106626 },
+      { label: 'ปั๊มหยอดเหรียญ 07', lat: 16.947927349769934, lng: 103.1218014582138 },
+      { label: 'ใบบุญ บริการ', lat: 16.85439896751086, lng: 103.0832960075836 },
+      { label: 'สถานนีปั๊มน้ำมัน 05', lat: 17.02639610472808, lng: 103.23837112461024 },
+      { label: 'สถานีบริการน้ำมันครูตุ๋ยปิโตรเลียม', lat: 17.075464919092465, lng: 103.25009919476203 },
+      { label: 'แฟมิลี่ ปิโตรเลียม', lat: 17.135582623982362, lng: 103.38963365286814 },
+      { label: 'ปั๊มหยอดเหรียญ 08', lat: 17.088741238033858, lng: 103.31914292628643 },
+      { label: 'ปั๊มหยอดเหรียญ 09', lat: 17.03370323026392, lng: 103.3123481722259 },
+      { label: 'ปั๊มหยอดเหรียญ 10', lat: 17.005129041425082, lng: 103.28821250218549 },
+      { label: 'ปั๊มหยอดเหรียญ 11', lat: 17.00336097650442, lng: 103.29555349868691 },
+      { label: 'เกวลิน บริการ', lat: 16.945032355626573, lng: 103.16581327281119 },
+      { label: 'เอกศิริทรัพย์', lat: 17.05134242297704, lng: 103.14020440830355 },
+      { label: 'ปั๊ม ส.ศิริโรจน์ 2', lat: 17.04076053274442, lng: 103.11321980752213 },
+      { label: 'ไม่ระบุ5 จอดรถ', lat: 16.955169782364194, lng: 103.04753030424521 },
+      { label: 'ปั้มน้ำมันเสี่ยโหน่งบริการ', lat: 16.9518292332927, lng: 103.0339158964179 },
+      { label: 'ป.ปัดถากิจเจริญทรัพย์', lat: 16.978564687341244, lng: 102.84798155296961 },
+      { label: 'ปั๊มหยอดเหรียญ 12', lat: 16.984645057598417, lng: 103.00826957997445 },
+      { label: 'ไม่ระบุ1 จอดรถ', lat: 16.994217062789055, lng: 103.01394489827595 },
+      { label: 'สมจิตรปิโตรเลียม', lat: 16.998685155553552, lng: 103.08626791406621 },
+      { label: 'ปั๊มบ้านสวน', lat: 17.001232587667243, lng: 103.11586156058408 },
+      { label: 'ปั๊มหยอดเหรียญ 13', lat: 16.942963420854102, lng: 103.18554553194585 },
+      { label: 'โชคศิริ', lat: 16.908835259839872, lng: 103.16762784767786 },
+      { label: 'ปั๊มหยอดเหรียญ 14', lat: 16.873158799866108, lng: 103.10926568197972 },
+      { label: 'ปั๊มหมุน 1', lat: 16.857076469749476, lng: 103.07421203593547 },
+      { label: 'ไม่ระบุ2 จอดรถ', lat: 16.845251776861826, lng: 103.07421285410867 },
+      { label: 'อัมพรบริการ', lat: 16.942832307127063, lng: 103.17916126748365 },
+      { label: 'ปั๊มหยอดเหรียญ 15', lat: 17.045156904114805, lng: 102.83667975711022 },
+      { label: 'ปั๊มหยอดเหรียญ 16', lat: 17.04694848473923, lng: 102.8299533049174 },
+      { label: 'อุไรพรบริการ', lat: 17.01449906127115, lng: 102.74762434355166 },
+      { label: 'ไม่ระบุ3 จอดรถ', lat: 16.866594182119325, lng: 102.83943613034829 },
+      { label: 'ไม่ระบุ4 จอดรถ', lat: 16.928473745064164, lng: 103.1060268859432 },
+      { label: 'ไม่ระบุ6 จอดรถ', lat: 17.24062104131843, lng: 103.34620399977116 },
+      { label: 'ปั๊มหยอดเหรียญ 17', lat: 17.239774852246985, lng: 103.34939983168013 },
+      { label: 'สถานนีปั๊มน้ำมัน 06', lat: 17.344960249584027, lng: 103.2860334766527 },
+      { label: 'ปั๊มน้ำมันบางจาก - สหกรณ์การเกษตร ไชยวาน', lat: 17.28986564885867, lng: 103.22383060288678 },
+      { label: 'สถานนีปั๊มน้ำมัน 07', lat: 16.96641182041901, lng: 103.09235454065592 },
+      { label: 'ปั๊มหมุน 2', lat: 16.96922500127075, lng: 102.96085638475539 },
+      { label: 'ปั๊มหยอดเหรียญ 18', lat: 16.744026462499523, lng: 103.11037062585359 },
+      { label: 'ไม่ระบุ7 จอดรถ', lat: 16.75339666113845, lng: 103.08870536418858 }
+    ].map(p => ({ ...p, radiusKm: 0, color: '#1666d6', group: 'MT-58', shape: 'pin' }));
+
+    // ===== Data: MT-60 (red) =====
+    const INIT_POINTS_MT60 = [
+      { label: 'พรทวีบริการ', lat: 16.661718836212412, lng: 103.09449876636658 },
+      { label: 'ตั้งเจริญทรัพย์พืชผล', lat: 16.596546106804304, lng: 103.10931293700972 },
+      { label: 'สถานีบริการน้ำมันพีที', lat: 16.7877184680463, lng: 102.75358797289536 },
+      { label: 'ปั๊มหมุน 1', lat: 16.792385574304184, lng: 102.81179489204096 },
+      { label: 'ปั๊มหยอดเหรียญ 1', lat: 16.801783668600265, lng: 102.75775447318837 },
+      { label: 'สถานนีปั๊มน้ำมัน 01', lat: 16.845808123130578, lng: 102.74149326248606 },
+      { label: 'ไม่ระบุ1 จอดรถ', lat: 16.829954883500122, lng: 102.7141661630935 },
+      { label: 'ปั๊มหยอดเหรียญ 2', lat: 16.831143551621597, lng: 102.71491037930993 },
+      { label: 'สถานนีปั๊มน้ำมัน 02', lat: 16.84746568879565, lng: 102.67554464579412 },
+      { label: 'ปั๊มหยอดเหรียญ 3', lat: 16.83204008710221, lng: 102.64009480535252 },
+      { label: 'ปั๊มหมุน 2', lat: 16.809464995883072, lng: 102.677289592563 },
+      { label: 'ปั๊มหมุน 3', lat: 16.771917062071843, lng: 102.71831970923193 },
+      { label: 'สถานนีปั๊มน้ำมัน 03', lat: 16.721149985854783, lng: 102.7198769153493 },
+      { label: 'ปั๊มน้ำมัน มีจันทร์ดี ออยล์', lat: 16.646413921525486, lng: 102.68259822692274 },
+      { label: 'ชาคิยา บริการ', lat: 16.601887954638922, lng: 102.65690957728438 },
+      { label: 'สถานนีปั๊มน้ำมัน 04', lat: 16.514546946996912, lng: 102.56753813681081 },
+      { label: 'ปั๊มหมุน 4', lat: 16.547347741770533, lng: 102.62148911483413 },
+      { label: 'ปั๊มหมุน 5', lat: 16.54754769786817, lng: 102.62098402910696 },
+      { label: 'ปั๊มหมุน 6', lat: 16.641495808461368, lng: 102.68185133792952 },
+      { label: 'สถานนีปั๊มน้ำมัน 05', lat: 16.678908254787263, lng: 102.7049704897462 },
+      { label: 'ปั๊มหมุน 7', lat: 16.64738745540226, lng: 102.7534036976415 },
+      { label: 'ปั๊มหมุน 8', lat: 16.643680650721315, lng: 102.75427150893525 },
+      { label: 'ปั๊มหมุน 9', lat: 16.63253611770243, lng: 102.77043900269985 },
+      { label: 'ปั๊มหมุน 19', lat: 16.63359336075484, lng: 102.76819070398174 },
+      { label: 'ปั๊มหยอดเหรียญ 4', lat: 16.845717095591894, lng: 103.04391600114077 },
+      { label: 'ปั๊มหยอดเหรียญ 5', lat: 16.92144977315612, lng: 103.10491669031988 },
+      { label: 'ปั๊มหยอดเหรียญ 6', lat: 16.91454871167809, lng: 102.99774722826328 },
+      { label: 'ปั๊มหมุน 10', lat: 16.909619365982877, lng: 102.97194547774215 },
+      { label: 'สถานนีปั๊มน้ำมัน 06', lat: 16.892228020891295, lng: 102.94555660315898 },
+      { label: 'ปั๊มหมุน 11', lat: 16.891353815390367, lng: 102.94229586047688 },
+      { label: 'ปั๊มหมุน 12', lat: 16.892150673689695, lng: 102.94097099216295 },
+      { label: 'สถานนีปั๊มน้ำมัน 07', lat: 16.890495231369226, lng: 102.93404134418047 },
+      { label: 'ปั๊มหยอดเหรียญ 7', lat: 16.915583159413007, lng: 102.90332924676113 },
+      { label: 'สถานนีปั๊มน้ำมัน 08', lat: 16.932762570309226, lng: 102.90343207625116 },
+      { label: 'ป.ปัดถากิจเจริญทรัพย์', lat: 16.978564687341244, lng: 102.84798155296961 },
+      { label: 'ปั๊มหยอดเหรียญ 8', lat: 16.81043783923021, lng: 102.90686081950999 },
+      { label: 'ปั๊มหยอดเหรียญ 9', lat: 16.779651707424247, lng: 102.91682899875515 },
+      { label: 'ปั๊มหยอดเหรียญ 10', lat: 16.75272881643523, lng: 102.92394536692434 },
+      { label: 'ปั๊มหมุน 13', lat: 16.7480319164813, lng: 102.91591185181595 },
+      { label: 'รุ่งนรินทร์ บริการ', lat: 16.797723078452556, lng: 103.0050240476591 },
+      { label: 'ไม่ระบุ2 จอดรถ', lat: 16.773745656466588, lng: 103.02710636418863 },
+      { label: 'ปั๊มหมุน 14', lat: 16.7867083102318, lng: 103.05038596607668 },
+      { label: 'ไม่ระบุ3 จอดรถ', lat: 16.77155842695275, lng: 103.02683390784442 },
+      { label: 'ปั๊มหยอดเหรียญ 11', lat: 16.678021615474535, lng: 103.00301262593987 },
+      { label: 'ปั๊มหยอดเหรียญ 12', lat: 16.676789136354724, lng: 103.0020975064505 },
+      { label: 'ไม่ระบุ4 จอดรถ', lat: 16.554857489027757, lng: 102.97685334483023 },
+      { label: 'ครูยุทธ บริการ', lat: 16.55051160191558, lng: 102.97616600967417 },
+      { label: 'สถานนีปั๊มน้ำมัน 10', lat: 16.60743243533814, lng: 103.1288363676649 },
+      { label: 'ปั๊มหยอดเหรียญ 13', lat: 16.60885429608335, lng: 103.1252705462126 },
+      { label: 'ปั๊มหยอดเหรียญ 14', lat: 16.64544832085241, lng: 103.13015084505469 },
+      { label: 'ปั๊มหยอดเหรียญ 15', lat: 16.66501586838643, lng: 103.09043586069374 },
+      { label: 'ปั๊มหยอดเหรียญ 16', lat: 16.690100325304655, lng: 103.08608770007883 },
+      { label: 'ปั๊มหยอดเหรียญ 17', lat: 16.700336658827027, lng: 102.85367969680765 },
+      { label: 'ปั๊มหมุน 15', lat: 16.613762417631445, lng: 102.7669277975881 },
+      { label: 'ปั๊มหมุน 16', lat: 16.580801692171683, lng: 102.72620445781082 },
+      { label: 'สถานนีปั๊มน้ำมัน 11', lat: 16.509252950305793, lng: 102.66456691681817 },
+      { label: 'ปั๊มหยอดเหรียญ 18', lat: 16.60893705421616, lng: 102.66086698612006 },
+      { label: 'ปท.ห้วยเตย', lat: 16.58821396004269, lng: 103.11246967222807 },
+      { label: 'ไม่ระบุ5 จอดรถ', lat: 16.799343228838946, lng: 102.76803598753 },
+      { label: 'ปั๊มหยอดเหรียญ 19', lat: 16.877831936125222, lng: 102.75462863474853 },
+      { label: 'สถานนีปั๊มน้ำมัน 01', lat: 16.845808123130578, lng: 102.74149326248606 },
+      { label: 'ปั๊มหยอดเหรียญ 20', lat: 16.84386173061282, lng: 102.7421677318382 },
+      { label: 'ปั๊มหมุน 17', lat: 16.830030850882356, lng: 102.71989125215084 },
+      { label: 'ปั๊มหยอดเหรียญ 21', lat: 16.8323819774768, lng: 102.70627752529956 },
+      { label: 'ปั๊มหมุน 18', lat: 16.809465753256013, lng: 102.6780566190509 },
+      { label: 'ปั๊มหมุน 2', lat: 16.809464995883072, lng: 102.677289592563 },
+      { label: 'สถานนีปั๊มน้ำมัน 12', lat: 16.764884298174394, lng: 102.6667330774989 },
+      { label: 'สถานนีปั๊มน้ำมัน 03', lat: 16.721149985854783, lng: 102.7198769153493 },
+      { label: 'ปั๊มน้ำมัน มีจันทร์ดี ออยล์', lat: 16.646413921525486, lng: 102.68259822692274 },
+      { label: 'สถานนีปั๊มน้ำมัน 04', lat: 16.514546946996912, lng: 102.56753813681081 },
+      { label: 'ปั๊มหมุน 4', lat: 16.547347741770533, lng: 102.62148911483413 },
+      { label: 'ปั๊มหมุน 5', lat: 16.54754769786817, lng: 102.62098402910696 },
+      { label: 'ชาคิยา บริการ', lat: 16.601887954638922, lng: 102.65690957728438 },
+      { label: 'ปั๊มหมุน 6', lat: 16.641495808461368, lng: 102.68185133792952 },
+      { label: 'สถานนีปั๊มน้ำมัน 05', lat: 16.678908254787263, lng: 102.7049704897462 },
+      { label: 'ปั๊มหมุน 7', lat: 16.64738745540226, lng: 102.7534036976415 },
+      { label: 'ปั๊มหมุน 8', lat: 16.643680650721315, lng: 102.75427150893525 },
+      { label: 'ปั๊มหมุน 19', lat: 16.63359336075484, lng: 102.76819070398174 },
+      { label: 'ปั๊มหมุน 9', lat: 16.63253611770243, lng: 102.77043900269985 },
+      { label: 'ไม่ระบุ6 จอดรถ', lat: 16.63372719225121, lng: 102.77170575544739 },
+      { label: 'ปั๊มหยอดเหรียญ 22', lat: 16.669740179384682, lng: 102.99673592383101 },
+      { label: 'ปั๊มหมุน 20', lat: 16.77014014677605, lng: 103.02226914040592 },
+      { label: 'ไม่ระบุ3 จอดรถ', lat: 16.77155842695275, lng: 103.02683390784442 },
+      { label: 'ไม่ระบุ2 จอดรถ', lat: 16.773745656466588, lng: 103.02710636418863 },
+      { label: 'ปั๊มหยอดเหรียญ 5', lat: 16.92144977315612, lng: 103.10491669031988 },
+      { label: 'ไม่ระบุ7 จอดรถ', lat: 16.922559146109016, lng: 103.05267999818025 },
+      { label: 'ปั๊มหยอดเหรียญ 6', lat: 16.91454871167809, lng: 102.99774722826328 },
+      { label: 'ปั๊มหมุน 10', lat: 16.909619365982877, lng: 102.97194547774215 },
+      { label: 'สถานนีปั๊มน้ำมัน 06', lat: 16.892228020891295, lng: 102.94555660315898 },
+      { label: 'ปั๊มหมุน 12', lat: 16.892150673689695, lng: 102.94097099216295 },
+      { label: 'ปั๊มหมุน 11', lat: 16.891353815390367, lng: 102.94229586047688 },
+      { label: 'สถานนีปั๊มน้ำมัน 08', lat: 16.932762570309226, lng: 102.90343207625116 },
+      { label: 'ปั๊มหยอดเหรียญ 23', lat: 16.75903519876593, lng: 102.93350773166782 },
+      { label: 'รุ่งนรินทร์ บริการ', lat: 16.797723078452556, lng: 103.0050240476591 },
+      { label: 'ปั๊มหยอดเหรียญ 24', lat: 16.80270688529724, lng: 103.00659289138159 },
+      { label: 'สุพจน์บริการ', lat: 16.680650198381837, lng: 103.10080976898989 },
+      { label: 'ปั๊มหยอดเหรียญ 25', lat: 16.635457918882118, lng: 103.07483560918747 },
+      { label: 'สถานนีปั๊มน้ำมัน 10', lat: 16.60743243533814, lng: 103.1288363676649 },
+      { label: 'ปั๊มหมุน 21', lat: 16.6088000947469, lng: 103.12546071284534 },
+      { label: 'ปั๊มหมุน 16', lat: 16.580801692171683, lng: 102.72620445781082 },
+      { label: 'ชาคิยา บริการ', lat: 16.601887954638922, lng: 102.65690957728438 },
+      { label: 'สถานนีปั๊มน้ำมัน 03', lat: 16.721149985854783, lng: 102.7198769153493 },
+      { label: 'ปั๊มหมุน 22', lat: 16.74226816333035, lng: 102.7800321986354 }
+    ].map(p => ({ ...p, radiusKm: 0, color: '#ef4444', group: 'MT-60', shape: 'pin' }));
+
+    // ===== สำคัญ: สถานที่สำคัญ (star orange) =====
+    const IMPORTANT_FACTORY = [
+      { lat: 16.963399467801676, lng: 103.2993011976785, label: 'โรงแป้งมัน CK' },
+      { lat: 16.966267962106556, lng: 103.28097791662437, label: 'อัญมณี ไรซ์ (โรงสีข้าว)' },
+      { lat: 16.968553142188725, lng: 103.27206433638978, label: 'โรงน้ำดื่มแพรทอง' },
+      { lat: 16.93031624391019, lng: 103.26461994135809, label: 'โรงงานแป้งมันสำปะหลังไทยวา' },
+      { lat: 16.932903863466407, lng: 103.267962748934, label: 'Bio gas บ.ไทยวา' },
+      { lat: 16.92943857518252, lng: 103.26330962831427, label: 'ไทยวา บมจ.' },
+      { lat: 16.929814221459164, lng: 103.26050464285818, label: 'ศูนย์อ้อยท่าคันโท โรงงานน้ำตาลขอนแก่น' },
+      { lat: 16.943977291974083, lng: 103.24006613546352, label: 'โรงน้ำแข็งซันนี่ ท่าคันโท' },
+      { lat: 16.938382924363694, lng: 103.23568717104573, label: 'โรงงานที่นอนครอบครัวเฟอร์นิเจอร์' },
+      { lat: 16.955729809472345, lng: 103.30940547289441, label: 'โรงน้ำแข็งกิมชุนไอซ์ศรีธาตุ' },
+      { lat: 16.947115097195926, lng: 103.41839793546349, label: 'โรงงานน้ำแข็งนานาภัณฑ์' },
+      { lat: 17.06161164915189, lng: 103.08461573546347, label: 'โรงแป้งมันเชาวน์ดี อีสาน' },
+      { lat: 16.9491054400675, lng: 103.44861857104573, label: 'โรงงานปูนผสมเสร็จซีแพค' },
+      { lat: 16.942716644707765, lng: 103.13222372871677, label: 'บริษัท อิสานพรีเมี่ยม สตาร์ช จำกัด' },
+      { lat: 16.973343342384563, lng: 103.22787632871677, label: 'ส.เจริญการค้า' }
+    ].map(p => ({ ...p, radiusKm:0, color:'#f59e0b', group:'สถานที่สำคัญ: โรงงาน', shape:'star' }));
+
+    const IMPORTANT_GOV = [
+      { lat: 16.97295560600922, lng: 103.26896517625221, label: 'หน่วยพัฒนาการเคลื่อนที่ที่ 21' },
+      { lat: 16.948457211873382, lng: 103.42816968077763, label: 'ไปรษณีย์วังสามหมอ' },
+      { lat: 16.949806996746677, lng: 103.43009663459547, label: 'กศน.วังสามหมอ' },
+      { lat: 16.940446516881785, lng: 103.44447154177449, label: 'เทศบาลตำบลวังสามหมอ' },
+      { lat: 17.028165433651182, lng: 103.12331526217105, label: 'เทศบาลตำบลบ้านโปร่ง' },
+      { lat: 17.05524125875341, lng: 103.12309384214132, label: 'อบต.ตาดทอง' }
+    ].map(p => ({ ...p, radiusKm:0, color:'#f59e0b', group:'สถานที่สำคัญ: สถานที่ราชการ', shape:'star' }));
+
+    const IMPORTANT_SCHOOL = [
+      { lat: 16.967644895459063, lng: 103.26425805618487, label: 'โรงเรียนบ้านโคกหนองแวง' },
+      { lat: 16.98149169523711, lng: 103.2664463781135, label: 'โรงเรียนบ้านนายูง' },
+      { lat: 16.938470252594307, lng: 103.24595572225925, label: 'โรงเรียนนาตาลวิทยาคม' },
+      { lat: 16.938109415953395, lng: 103.23273785722077, label: 'โรงเรียนท่าคันโทวิทยายน' },
+      { lat: 16.932397234315346, lng: 103.22916539110909, label: 'โรงเรียนท่าคันโทวิทยาคาร' },
+      { lat: 16.97302692191719, lng: 103.21872127960367, label: 'โรงเรียนศรีธาตุพิทยาคม' },
+      { lat: 16.988952647798474, lng: 103.23218706419634, label: 'โรงเรียนบ้านกอก' },
+      { lat: 16.941114603690988, lng: 103.24310860484123, label: 'โรงเรียนเทศบาลท่าคันโท' },
+      { lat: 16.954080217579445, lng: 103.3435470662569, label: 'โรงเรียนบ้านหนองหญ้าไซ' }
+    ].map(p => ({ ...p, radiusKm:0, color:'#f59e0b', group:'สถานที่สำคัญ: โรงเรียน', shape:'star' }));
+
+    // ===== สาขา (Branches) =====
+    const BRANCHES = [
+      { label: 'ST (ศรีธาตุ)', lat: 16.381077857535082, lng: 103.34878306123511, radiusKm: 100 },
+      { label: 'WNN (วานรนิวาส)', lat: 17.629310454083484, lng: 103.76762092529806, radiusKm: 100 },
+      { label: 'KN (กันทรวิชัย)', lat: 16.716003911503602, lng: 103.08204680424339, radiusKm: 100 },
+      { label: 'MUK (มุกดาหาร)', lat: 16.715997069768893, lng: 103.08204553963455, radiusKm: 100 }
+    ].map(p => ({ ...p, color: '#8b5cf6', group: 'สาขา', shape: 'pin' }));
+
+    // ===== Others =====
+    const SPECIALS = [
+      { label: 'PT ศรีธาตุ', lat: 16.967218892333054, lng: 103.27321383932237, radiusKm: 100, color: '#FFFF00', group: 'อื่นๆ', shape:'pin' }
+    ];
+
+    // ===== State & storage =====
+    const STORAGE_KEY = 'kc_map_mt5860_overlay_v30_single';
+    let PENDING_POINTS = [];
+    try{
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      if(Array.isArray(saved)) PENDING_POINTS = saved;
+    }catch(e){ /* ignore */ }
+
+    function dedupeAppend(points){
+      const key = (p) => `${fmtNum(p.lat)}|${fmtNum(p.lng)}|${(p.label||'').trim()}`;
+      const mapByKey = new Map(PENDING_POINTS.map(p => [key(p), p]));
+      points.forEach(p => mapByKey.set(key(p), p));
+      PENDING_POINTS = Array.from(mapByKey.values());
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(PENDING_POINTS));
+    }
+
+    // ===== Build dynamic sections =====
+    function buildSections(){
+      const container = document.getElementById('sections');
+      container.innerHTML = '';
+
+      // Group points
+      const groups = {};
+      (PENDING_POINTS||[]).forEach(p => { (groups[p.group] = groups[p.group] || []).push(p); });
+
+      const order = ['MT-58','MT-60','สถานที่สำคัญ: โรงงาน','สถานที่สำคัญ: สถานที่ราชการ','สถานที่สำคัญ: โรงเรียน','สาขา','อื่นๆ'];
+      const colorHint = {
+        'MT-58': 'var(--blue)',
+        'MT-60': 'var(--red)',
+        'สถานที่สำคัญ: โรงงาน': 'var(--orange)',
+        'สถานที่สำคัญ: สถานที่ราชการ': 'var(--orange)',
+        'สถานที่สำคัญ: โรงเรียน': 'var(--orange)',
+        'สาขา': '#8b5cf6',
+        'อื่นๆ': '#999'
+      };
+      const COMPACT_GROUPS = new Set(['MT-58','MT-60','สถานที่สำคัญ: โรงงาน','สถานที่สำคัญ: สถานที่ราชการ','สถานที่สำคัญ: โรงเรียน']);
+      const SINGLE_SELECT = new Set(['อื่นๆ']); // <- make these two single-select
+
+      [...order, ...Object.keys(groups).filter(g => !order.includes(g))].forEach(g => {
+        if(!groups[g]) return;
+        const isCompact = COMPACT_GROUPS.has(g);
+        const isSingle = SINGLE_SELECT.has(g);
+        const sec = document.createElement('div'); sec.className = 'section';
+        sec.innerHTML = `
+          <div class="head">
+            <div><b>${g}</b> <span class="dot" style="background:${colorHint[g]||'#999'}"></span></div>
+            <div>
+              <button class="btn small" data-gselect="on"  data-group="${g}">เลือกกลุ่ม</button>
+              <button class="btn small" data-gselect="off" data-group="${g}">ซ่อนกลุ่ม</button>
+            </div>
+          </div>
+          ${isCompact ? '' : `<div class="list" data-group-list="${g}"></div>`}
+        `;
+        container.appendChild(sec);
+
+        // For compact groups, default select all silently
+        if(isCompact){
+          (groups[g]||[]).forEach(p => { const k = KEYPOINT(p); if(!ACTIVE_KEYS.has(k)) ACTIVE_KEYS.add(k); });
+        }
+      });
+
+      // Fill items for non-compact: 'สาขา', 'อื่นๆ'
+      Object.entries(groups).forEach(([g, items]) => {
+        if(COMPACT_GROUPS.has(g)) return;
+        const wrap = container.querySelector(`[data-group-list="${g}"]`);
+        if(!wrap) return; wrap.innerHTML = '';
+
+        const isSingle = new Set(['อื่นๆ']).has(g);
+        items.forEach((p, idx) => {
+          const key = KEYPOINT(p);
+          const inputType = isSingle ? 'radio' : 'checkbox';
+          const nameAttr = isSingle ? `name="group-${g}"` : '';
+          // default: single-select groups start unchecked; user chooses one
+          const checkedAttr = '';
+          const row = document.createElement('label'); row.className='row';
+          row.innerHTML = `<input type="${inputType}" ${nameAttr} data-key="${key}" data-group="${g}" ${checkedAttr}> <span class="dot" style="background:${p.color}"></span> <span>${p.label}</span>`;
+          wrap.appendChild(row);
+        });
+      });
+
+      // Group-level buttons
+      container.querySelectorAll('[data-group]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const g = btn.getAttribute('data-group');
+          const turnOn = btn.getAttribute('data-gselect')==='on';
+          const isCompact = COMPACT_GROUPS.has(g);
+          const isSingle = SINGLE_SELECT.has(g);
+          const groupItems = (groups[g]||[]);
+
+          if(isCompact){
+            groupItems.forEach(p => {
+              const k = KEYPOINT(p);
+              if(turnOn) ACTIVE_KEYS.add(k); else ACTIVE_KEYS.delete(k);
+            });
+          }else{
+            const inputs = Array.from(document.querySelectorAll(`input[data-group="${g}"]`));
+            if(isSingle){
+              // choose first item if turning on; clear all if turning off
+              if(turnOn && inputs.length){
+                inputs.forEach(i => { i.checked = false; });
+                const first = inputs[0];
+                first.checked = true;
+                // clear group keys, then add selected
+                groupItems.forEach(p => ACTIVE_KEYS.delete(KEYPOINT(p)));
+                ACTIVE_KEYS.add(first.getAttribute('data-key'));
+              }else{
+                inputs.forEach(i => i.checked = false);
+                groupItems.forEach(p => ACTIVE_KEYS.delete(KEYPOINT(p)));
+              }
+            }else{
+              // multi-select fallback (not used here)
+              inputs.forEach(cb => {
+                cb.checked = turnOn;
+                const k = cb.getAttribute('data-key');
+                if(turnOn) ACTIVE_KEYS.add(k); else ACTIVE_KEYS.delete(k);
+              });
+            }
+          }
+          renderFiltered();
+        });
+      });
+
+      // Per-item change via event delegation (works reliably for radios)
+      container.addEventListener('change', (e)=>{
+        const t = e.target;
+        if(!(t && (t.matches('input[type="radio"]') || t.matches('input[type="checkbox"]')))) return;
+        const g = t.getAttribute('data-group');
+        const key = t.getAttribute('data-key');
+        const isSingle = SINGLE_SELECT.has(g);
+        if(isSingle){
+          // uncheck all others in same group explicitly
+          container.querySelectorAll(`input[data-group="${g}"]`).forEach(i => { if(i!==t) i.checked = false; });
+          (groups[g]||[]).forEach(p => ACTIVE_KEYS.delete(KEYPOINT(p)));
+          if(t.checked){ ACTIVE_KEYS.add(key); }
+        }else{
+          if(t.checked) ACTIVE_KEYS.add(key); else ACTIVE_KEYS.delete(key);
+        }
+        renderFiltered();
+      });
+    }
+
+    // Global select
+    document.getElementById('btnAllOn').addEventListener('click', ()=>{
+      ACTIVE_KEYS.clear();
+      (PENDING_POINTS||[]).forEach(p => {
+        // for single-select groups we won't auto-select here; leave them off
+        if(p.group==='สาขา' || p.group==='อื่นๆ') return;
+        ACTIVE_KEYS.add(KEYPOINT(p));
+      });
+      // uncheck radios/checkboxes in single-select lists
+      document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(i => {
+        const g = i.getAttribute('data-group');
+        if(g==='สาขา' || g==='อื่นๆ'){ i.checked = false; } else { i.checked = true; }
+      });
+      renderFiltered();
+    });
+    document.getElementById('btnAllOff').addEventListener('click', ()=>{
+      ACTIVE_KEYS.clear();
+      document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(i => i.checked = false);
+      renderFiltered();
+    });
+
+    // Copy lat/lng on click
+    map.on('click', async (e) => {
+      const s = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; try{ await navigator.clipboard.writeText(s);}catch(_){ }
+    });
+
+    // Init
+    dedupeAppend([
+      ...INIT_POINTS_MT58,
+      ...INIT_POINTS_MT60,
+      ...IMPORTANT_FACTORY,
+      ...IMPORTANT_GOV,
+      ...IMPORTANT_SCHOOL,
+      ...BRANCHES,
+      ...SPECIALS
+    ]);
+    // Default: select all compact groups, keep single-select groups empty until chosen
+    (PENDING_POINTS||[]).forEach(p => {
+      if(p.group!=='สาขา' && p.group!=='อื่นๆ'){ ACTIVE_KEYS.add(KEYPOINT(p)); }
+    });
+    buildSections();
+    renderFiltered();
+  </script>
+</body>
+</html>
