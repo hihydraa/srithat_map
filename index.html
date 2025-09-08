@@ -23,8 +23,8 @@
       position: fixed; inset: 0;
       width: 100vw;
       height: 100vh;   /* fallback */
-      height: 100dvh;  /* dynamic viewport (iOS/Android) */
-      height: 100svh;  /* small viewport (บางกรณี Android) */
+      height: 100dvh;  /* dynamic viewport */
+      height: 100svh;  /* small viewport */
     }
 
     /* === Focus Area Info Card === */
@@ -46,6 +46,7 @@
     /* Section list */
     .section{border:1px dashed #e5e7eb; border-radius:12px; padding:8px 10px; background:#fafafa; margin-top:8px; max-height:260px; overflow:auto}
     .section .head{display:flex; justify-content:space-between; align-items:center; margin:6px 0}
+
     .row{display:flex; align-items:center; gap:8px; margin:4px 0; font-size:13px}
     .dot{width:10px; height:10px; border-radius:999px; display:inline-block; border:1px solid #e5e7eb}
     .lbl{background:#fff !important; color:#111827 !important; border:1px solid #e5e7eb; padding:3px 6px !important; border-radius:8px !important; box-shadow:0 4px 12px rgba(0,0,0,.08)}
@@ -57,8 +58,17 @@
     .legend{position:absolute; z-index:1000; left:14px; bottom:14px; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; box-shadow:0 8px 24px rgba(0,0,0,.08); font-size:13px}
     .legend .row{display:flex; align-items:center; gap:8px; margin:4px 0}
 
-    /* Error banner (ถ้า CDN/tiles ล่ม) */
+    /* Error banner */
     .err{position:absolute; z-index:1200; left:50%; transform:translateX(-50%); top:8px; background:#fee2e2; color:#7f1d1d; border:1px solid #fecaca; border-radius:10px; padding:6px 10px; font-size:13px; display:none}
+
+    /* === Accordion for sections === */
+    .section .head{ cursor:pointer; position:relative; padding-right:28px; }
+    .section .head::after{
+      content:'▾'; position:absolute; right:8px; top:8px; font-size:14px;
+      color:#6b7280; transition: transform .2s ease;
+    }
+    .section.collapsed .head::after{ transform: rotate(-90deg); }
+    .section.collapsed > *:not(.head){ display:none; } /* hide content when collapsed */
 
     /* === Responsive additions === */
     .fab{
@@ -129,11 +139,11 @@
       </div>
       <table class="mini">
         <thead>
-        <tr><th>พืช</th><th>พื้นที่ (ไร่)</th></tr>
+          <tr><th>พืช</th><th>พื้นที่ (ไร่)</th></tr>
         </thead>
         <tbody>
-        <tr><td>มันสำปะหลัง</td><td>69,915</td></tr>
-        <tr><td>อ้อย</td><td>91,696</td></tr>
+          <tr><td>มันสำปะหลัง</td><td>69,915</td></tr>
+          <tr><td>อ้อย</td><td>91,696</td></tr>
         </tbody>
       </table>
     </div>
@@ -160,7 +170,6 @@
   </script>
 
   <script>
-    // helper แสดง error
     function showError(msg){
       const el = document.getElementById('errBanner');
       if(!el) return;
@@ -168,7 +177,6 @@
       el.style.display = 'block';
     }
 
-    // เริ่มทำงานเมื่อ Leaflet โหลดแน่ ๆ
     (function startWhenReady(){
       if(typeof L==='undefined'){ return setTimeout(startWhenReady, 50); }
 
@@ -306,7 +314,7 @@
         { label: 'ไม่ระบุ7 จอดรถ', lat: 16.75339666113845, lng: 103.08870536418858 }
       ].map(p => ({ ...p, radiusKm: 0, color: '#1666d6', group: 'MT-58', shape: 'pin' }));
 
-      // ===== Data: MT-60 (ตัวอย่างท้ายรายการ) =====
+      // ===== Data: MT-60 (ย่อ) =====
       const INIT_POINTS_MT60 = [
         { label: 'ปั๊มหมุน 22', lat: 16.74226816333035, lng: 102.7800321986354 }
       ].map(p => ({ ...p, radiusKm: 0, color: '#ef4444', group: 'MT-60', shape: 'pin' }));
@@ -324,7 +332,7 @@
         { lat: 16.954080217579445, lng: 103.3435470662569, label: 'โรงเรียนบ้านหนองหญ้าไซ' }
       ].map(p => ({ ...p, radiusKm:0, color:'#f59e0b', group:'สถานที่สำคัญ: โรงเรียน', shape:'star' }));
 
-      // ===== สาขา (Branches) =====
+      // ===== สาขา =====
       const BRANCHES = [
         { label: 'ST (ศรีธาตุ)', lat: 16.381077857535082, lng: 103.34878306123511, radiusKm: 100 },
         { label: 'WNN (วานรนิวาส)', lat: 17.629310454083484, lng: 103.76762092529806, radiusKm: 100 },
@@ -353,7 +361,7 @@
         localStorage.setItem(STORAGE_KEY, JSON.stringify(PENDING_POINTS));
       }
 
-      // ===== Build dynamic sections =====
+      // ===== Build dynamic sections (with accordion) =====
       function buildSections(){
         const container = document.getElementById('sections');
         container.innerHTML = '';
@@ -377,6 +385,7 @@
         [...order, ...Object.keys(groups).filter(g => !order.includes(g))].forEach(g => {
           if(!groups[g]) return;
           const isCompact = COMPACT_GROUPS.has(g);
+
           const sec = document.createElement('div'); sec.className = 'section';
           sec.innerHTML = `
             <div class="head">
@@ -390,12 +399,25 @@
           `;
           container.appendChild(sec);
 
+          // เริ่มต้น: มือถือพับทุก section
+          if (window.matchMedia('(max-width: 768px)').matches) {
+            sec.classList.add('collapsed');
+          }
+
+          // แตะหัวเพื่อพับ/ขยาย (ยกเว้นคลิกที่ปุ่มด้านใน)
+          const headEl = sec.querySelector('.head');
+          headEl.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            sec.classList.toggle('collapsed');
+            setTimeout(() => map.invalidateSize(), 150);
+          });
+
           if(isCompact){
             (groups[g]||[]).forEach(p => { const k = KEYPOINT(p); if(!ACTIVE_KEYS.has(k)) ACTIVE_KEYS.add(k); });
           }
         });
 
-        // Fill items for non-compact
+        // Fill items for non-compact: 'สาขา', 'อื่นๆ'
         Object.entries(groups).forEach(([g, items]) => {
           if(COMPACT_GROUPS.has(g)) return;
           const wrap = container.querySelector(`[data-group-list="${g}"]`);
@@ -451,6 +473,7 @@
           });
         });
 
+        // Per-item change (radio/checkbox)
         container.addEventListener('change', (e)=>{
           const t = e.target;
           if(!(t && (t.matches('input[type="radio"]') || t.matches('input[type="checkbox"]')))) return;
@@ -508,7 +531,7 @@
       buildSections();
       renderFiltered();
 
-      // Responsive controls: toggle panel
+      // === Toggle whole panel ===
       const ctrlPane = document.querySelector('.ctrl');
       const toggleBtn = document.getElementById('toggleCtrl');
       let ctrlVisible = true;
@@ -518,14 +541,18 @@
         setTimeout(() => map.invalidateSize(), 150);
       }
       toggleBtn.addEventListener('click', () => setCtrlVisible(!ctrlVisible));
+
+      // มือถือ: เริ่มต้นซ่อนแผงตัวกรอง
+      if (window.matchMedia('(max-width: 768px)').matches) setCtrlVisible(false);
+
       const onResize = () => setTimeout(() => map.invalidateSize(), 150);
       window.addEventListener('resize', onResize);
       window.addEventListener('orientationchange', onResize);
 
-      // บังคับคำนวณขนาดหลังโหลด เพื่อกันเทา
+      // บังคับคำนวณขนาดหลังโหลด
       setTimeout(() => map.invalidateSize(), 200);
 
-      // แจ้งเตือนถ้า tiles โหลดไม่ได้ (เช่น เครือข่ายบล็อค OSM)
+      // แจ้งเตือนถ้า tiles โหลดไม่ได้
       const testImg = new Image();
       testImg.onerror = () => showError('โหลดแผนที่ไม่สำเร็จ (tiles ถูกบล็อค/ช้า) — ลองรีเฟรชหรือเปลี่ยนเครือข่าย');
       testImg.src = 'https://tile.openstreetmap.org/0/0/0.png';
