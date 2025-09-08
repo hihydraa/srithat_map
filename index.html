@@ -42,6 +42,49 @@
     /* Legend */
     .legend{position:absolute; z-index:1000; left:14px; bottom:14px; background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; box-shadow:0 8px 24px rgba(0,0,0,.08); font-size:13px}
     .legend .row{display:flex; align-items:center; gap:8px; margin:4px 0}
+
+    /* === Responsive additions === */
+    #map{
+      height: 100vh;   /* fallback */
+      height: 100dvh;  /* dynamic viewport (iOS/Android) */
+      height: 100svh;  /* small viewport to avoid jump */
+    }
+
+    .fab{
+      position: absolute; z-index: 1100;
+      right: 14px; bottom: 14px;
+      background:#111827; color:#fff; border:0; cursor:pointer;
+      border-radius: 999px; padding:10px 14px; font-size:14px; box-shadow:0 8px 24px rgba(0,0,0,.18);
+    }
+    .fab:focus{ outline:none; box-shadow:var(--ring); }
+
+    @media (min-width: 769px){
+      .ctrl{ top:14px; right:14px; left:auto; bottom:auto; width:auto; }
+      .ctrl .box{ min-width:340px; max-width:380px; }
+    }
+
+    @media (max-width: 768px){
+      html, body{ font-size: 15px; }
+      .ctrl{
+        top:auto; bottom:64px; left:12px; right:12px;
+        width:auto; gap:8px;
+      }
+      .ctrl .box{
+        min-width: unset; width: 100%;
+        border-radius: 12px; padding:10px;
+      }
+      .section{ max-height: 40vh; }
+      .focus-box .mini{ font-size: 12px; }
+      .focus-box .stats .pill{ font-size: 12px; }
+
+      .legend{
+        left:12px; bottom:auto; top:12px; font-size:13px;
+        padding:8px 10px; border-radius:10px;
+      }
+
+      .btn.small{ padding:8px 10px; font-size:13px; }
+      .row{ gap:10px; }
+    }
   </style>
 </head>
 <body>
@@ -98,6 +141,9 @@
     <div class="row"><span class="dot" style="background:#999"></span> จุดอื่นๆ</div>
   </div>
 
+  <!-- Mobile/Any: toggle controls button -->
+  <button class="fab" id="toggleCtrl">ตัวกรอง/ข้อมูล</button>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     // ===== Map base =====
@@ -112,19 +158,19 @@
     const fmtNum = (n) => Number.isFinite(n) ? Number(n.toFixed(6)) : n;
     const counts = { markers: 0, circles: 0 };
     const ACTIVE_KEYS = new Set();
-    const KEYPOINT = (p) => `${fmtNum(p.lat)}|${fmtNum(p.lng)}|${(p.label||'').trim()}`;
+    const KEYPOINT = (p) => \`\${fmtNum(p.lat)}|\${fmtNum(p.lng)}|\${(p.label||'').trim()}\`;
 
     // Colored pin & star pin
     function markerIcon({color='#1666d6', shape='pin'}){
       if(shape === 'star'){
-        const svg = encodeURIComponent(`
+        const svg = encodeURIComponent(\`
           <svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>
-            <path fill='${color}' stroke='white' stroke-width='1.5' d='M12 2.5l2.95 6.07 6.7.97-4.83 4.71 1.14 6.65L12 17.77 6.04 20.9l1.14-6.65L2.35 9.54l6.7-.97L12 2.5z'/>
-          </svg>`);
-        return L.icon({ iconUrl: `data:image/svg+xml,${svg}`, iconSize:[24,24], iconAnchor:[9,16], popupAnchor:[0,-16] });
+            <path fill='\${color}' stroke='white' stroke-width='1.5' d='M12 2.5l2.95 6.07 6.7.97-4.83 4.71 1.14 6.65L12 17.77 6.04 20.9l1.14-6.65L2.35 9.54l6.7-.97L12 2.5z'/>
+          </svg>\`);
+        return L.icon({ iconUrl: \`data:image/svg+xml,\${svg}\`, iconSize:[24,24], iconAnchor:[9,16], popupAnchor:[0,-16] });
       }
       return L.divIcon({
-        html: `<div style="width:16px;height:16px;background:${color};border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.25)"></div>`,
+        html: \`<div style="width:16px;height:16px;background:\${color};border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.25)"></div>\`,
         className: '', iconSize:[18,18], iconAnchor:[9,16], popupAnchor:[0,-16]
       });
     }
@@ -138,7 +184,7 @@
       lat = parseFloat(lat); lng = parseFloat(lng);
       if(!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
       const marker = L.marker([lat, lng], { icon: markerIcon({color, shape}) });
-      if(label){ marker.bindPopup(`<b>${label}</b>`); }
+      if(label){ marker.bindPopup(\`<b>\${label}</b>\`); }
       marker.addTo(markersLayer); counts.markers++;
       let circle = null;
       if(Number.isFinite(radiusKm) && radiusKm > 0){
@@ -204,7 +250,7 @@
       { label: 'เอกศิริทรัพย์', lat: 17.05134242297704, lng: 103.14020440830355 },
       { label: 'ปั๊ม ส.ศิริโรจน์ 2', lat: 17.04076053274442, lng: 103.11321980752213 },
       { label: 'ไม่ระบุ5 จอดรถ', lat: 16.955169782364194, lng: 103.04753030424521 },
-      { label: 'ปั้มน้ำมันเสี่ยโหน่งบริการ', lat: 16.9518292332927, lng: 103.0339158964179 },
+      { label: 'ป้มน้ำมันเสี่ยโหน่งบริการ', lat: 16.9518292332927, lng: 103.0339158964179 },
       { label: 'ป.ปัดถากิจเจริญทรัพย์', lat: 16.978564687341244, lng: 102.84798155296961 },
       { label: 'ปั๊มหยอดเหรียญ 12', lat: 16.984645057598417, lng: 103.00826957997445 },
       { label: 'ไม่ระบุ1 จอดรถ', lat: 16.994217062789055, lng: 103.01394489827595 },
@@ -275,7 +321,7 @@
     }catch(e){ /* ignore */ }
 
     function dedupeAppend(points){
-      const key = (p) => `${fmtNum(p.lat)}|${fmtNum(p.lng)}|${(p.label||'').trim()}`;
+      const key = (p) => \`\${fmtNum(p.lat)}|\${fmtNum(p.lng)}|\${(p.label||'').trim()}\`;
       const mapByKey = new Map(PENDING_POINTS.map(p => [key(p), p]));
       points.forEach(p => mapByKey.set(key(p), p));
       PENDING_POINTS = Array.from(mapByKey.values());
@@ -308,16 +354,16 @@
         if(!groups[g]) return;
         const isCompact = COMPACT_GROUPS.has(g);
         const sec = document.createElement('div'); sec.className = 'section';
-        sec.innerHTML = `
+        sec.innerHTML = \`
           <div class="head">
-            <div><b>${g}</b> <span class="dot" style="background:${colorHint[g]||'#999'}"></span></div>
+            <div><b>\${g}</b> <span class="dot" style="background:\${colorHint[g]||'#999'}"></span></div>
             <div>
-              <button class="btn small" data-gselect="on"  data-group="${g}">เลือกกลุ่ม</button>
-              <button class="btn small" data-gselect="off" data-group="${g}">ซ่อนกลุ่ม</button>
+              <button class="btn small" data-gselect="on"  data-group="\${g}">เลือกกลุ่ม</button>
+              <button class="btn small" data-gselect="off" data-group="\${g}">ซ่อนกลุ่ม</button>
             </div>
           </div>
-          ${isCompact ? '' : `<div class="list" data-group-list="${g}"></div>`}
-        `;
+          \${isCompact ? '' : \`<div class="list" data-group-list="\${g}"></div>\`}
+        \`;
         container.appendChild(sec);
 
         if(isCompact){
@@ -328,16 +374,16 @@
       // Fill items for non-compact: 'สาขา', 'อื่นๆ'
       Object.entries(groups).forEach(([g, items]) => {
         if(COMPACT_GROUPS.has(g)) return;
-        const wrap = container.querySelector(`[data-group-list="${g}"]`);
+        const wrap = container.querySelector(\`[data-group-list="\${g}"]\`);
         if(!wrap) return; wrap.innerHTML = '';
 
         const isSingle = new Set(['อื่นๆ']).has(g);
         items.forEach((p) => {
           const key = KEYPOINT(p);
           const inputType = isSingle ? 'radio' : 'checkbox';
-          const nameAttr = isSingle ? `name="group-${g}"` : '';
+          const nameAttr = isSingle ? \`name="group-\${g}"\` : '';
           const row = document.createElement('label'); row.className='row';
-          row.innerHTML = `<input type="${inputType}" ${nameAttr} data-key="${key}" data-group="${g}"> <span class="dot" style="background:${p.color}"></span> <span>${p.label}</span>`;
+          row.innerHTML = \`<input type="\${inputType}" \${nameAttr} data-key="\${key}" data-group="\${g}"> <span class="dot" style="background:\${p.color}"></span> <span>\${p.label}</span>\`;
           wrap.appendChild(row);
         });
       });
@@ -357,7 +403,7 @@
               if(turnOn) ACTIVE_KEYS.add(k); else ACTIVE_KEYS.delete(k);
             });
           }else{
-            const inputs = Array.from(document.querySelectorAll(`input[data-group="${g}"]`));
+            const inputs = Array.from(document.querySelectorAll(\`input[data-group="\${g}"]\`));
             if(isSingle){
               if(turnOn && inputs.length){
                 inputs.forEach(i => { i.checked = false; });
@@ -389,7 +435,7 @@
         const key = t.getAttribute('data-key');
         const isSingle = SINGLE_SELECT.has(g);
         if(isSingle){
-          container.querySelectorAll(`input[data-group="${g}"]`).forEach(i => { if(i!==t) i.checked = false; });
+          container.querySelectorAll(\`input[data-group="\${g}"]\`).forEach(i => { if(i!==t) i.checked = false; });
           (groups[g]||[]).forEach(p => ACTIVE_KEYS.delete(KEYPOINT(p)));
           if(t.checked){ ACTIVE_KEYS.add(key); }
         }else{
@@ -420,7 +466,7 @@
 
     // Copy lat/lng on click
     map.on('click', async (e) => {
-      const s = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`; try{ await navigator.clipboard.writeText(s);}catch(_){ }
+      const s = \`\${e.latlng.lat.toFixed(6)}, \${e.latlng.lng.toFixed(6)}\`; try{ await navigator.clipboard.writeText(s);}catch(_){ }
     });
 
     // Init
@@ -438,6 +484,25 @@
     });
     buildSections();
     renderFiltered();
+
+    // === Responsive controls: toggle panel & invalidate size ===
+    const ctrlPane = document.querySelector('.ctrl');
+    const toggleBtn = document.getElementById('toggleCtrl');
+    let ctrlVisible = true;
+    function setCtrlVisible(v){
+      ctrlVisible = v;
+      ctrlPane.style.display = v ? 'flex' : 'none';
+      // คำนวณขนาด map ใหม่เมื่อ layout เปลี่ยน
+      setTimeout(() => map.invalidateSize(), 150);
+    }
+    toggleBtn.addEventListener('click', () => setCtrlVisible(!ctrlVisible));
+
+    const onResize = () => setTimeout(() => map.invalidateSize(), 150);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+
+    // ถ้าต้องการให้มือถือเริ่มต้นแบบซ่อนกล่อง:
+    // if (window.matchMedia('(max-width: 768px)').matches) setCtrlVisible(false);
   </script>
 </body>
 </html>
